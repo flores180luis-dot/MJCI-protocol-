@@ -1,5 +1,5 @@
 # if you haven't cloned yet
-git clone git@github.com:flores180luis-dot/MJCI-protocol.git
+clone git@github.com:flores180luis-dot/MJCI-protocol.git
 cd MJCI-protocol
 
 # create directories and add files (save the pasted contents into the matching paths)
