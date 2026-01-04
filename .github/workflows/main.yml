@@ -1,0 +1,11 @@
+# if you haven't cloned yet
+git clone git@github.com:flores180luis-dot/MJCI-protocol.git
+cd MJCI-protocol
+
+# create directories and add files (save the pasted contents into the matching paths)
+mkdir -p assets/images docs scripts
+# paste files into the corresponding paths (or create with an editor)
+
+git add assets/images/quickstart.svg docs/quickstart.md docs/commandments.md docs/beatitudes.md assets/images/quickstart-metadata.json docs/README-quickstart-snippet.md scripts/generate_images.sh
+git commit -m "Add quickstart infographic (SVG), docs, metadata, and export script"
+git push origin main
