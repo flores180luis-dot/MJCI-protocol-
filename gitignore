@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+.env
+.venv/
+.env.*
+.Pipfile.lock
+
+# IDEs / editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Byte-compiled / distribution
+pip-wheel-metadata/
