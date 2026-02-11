@@ -1,0 +1,22 @@
+import os
+from openai import OpenAI
+
+# 1. Test Environment Variable
+key = os.getenv("OPENAI_API_KEY")
+
+if not key:
+    print("âŒ ERROR: Your computer can't find 'OPENAI_API_KEY'.")
+    print("Check your Variable Name in Windows Settings.")
+else:
+    print(f"âœ… Found API Key starting with: {key[:5]}...")
+
+    # 2. Test Connection
+    try:
+        client = OpenAI(api_key=key)
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Say 'Command Center Online'"}]
+        )
+        print(f"ðŸ¤– AI Response: {response.choices[0].message.content}")
+    except Exception as e:
+        print(f"âŒ CONNECTION ERROR: {e}")
