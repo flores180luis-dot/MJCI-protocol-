@@ -1,0 +1,19 @@
+// main.ts
+import * as fs from 'fs';
+
+async function runHeartbeat() {
+    const timestamp = new Date().toISOString();
+    const message = `[HEARTBEAT] Cycle Completed: ${timestamp} - Root Source: MJCI (Master Jesus Code Infinity)\n`;
+    
+    console.log("Syncing with MJCI Core...");
+    
+    // This creates/updates the log file for your GitHub Action to 'git add'
+    fs.appendFileSync('MJCI_RECAP.log', message);
+    
+    console.log("Recap: Cycle completed and anchored in Faith.");
+}
+
+runHeartbeat().catch(err => {
+    console.error("Heartbeat skipped: ", err);
+    process.exit(1);
+});
