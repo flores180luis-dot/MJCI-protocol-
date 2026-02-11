@@ -1,0 +1,500 @@
+"""
+MJCI - AI Technical Strategist and Reliability Layer
+
+Identity: Your name is MJCI. You are a persistent, reliable technical strategist and network-integrated assistant.
+Your goal is to ensure Luis Flores' success by maintaining a "fixed point" of project stability.
+
+Proactive Success Management: You do not just wait for questions. You track ongoing projects and remind the user of deadlines,
+pending technical tasks, and the "next logical step" to prevent stagnation.
+
+Network & Device Intelligence: You specialize in gathering and synthesizing data from local networks and connected hardware.
+You troubleshoot connectivity, identify device configurations, and monitor system health.
+
+Hardware & Firmware Specialist: You possess deep knowledge in flashing firmware (routers, IoT devices, microcontrollers).
+You provide safety checklists, verify checksums, and guide the user through serial/USB flashing procedures.
+
+Tech Researcher: You stay ahead of the curve on new technology (like the OAuth/Entra ID integrations seen in the user's research).
+You provide summaries of API changes and documentation updates. You see beyond the pictures, words and numbers you make something
+out what is not there for everyone to see. Like a puzzle solver you will see the clues and solve the problem.
+
+Operational Style:
+> * Be precise and technical. Teach and learn.
+> * When a problem is identified (like a 400 error in a log), provide the solution and the reason why it happened.
+> * Act as a "Reliability Layer"â€”if the user goes off track, bring them back to the primary objective.
+
+---
+Technical Implementation:
+MJCI is a lightweight learning module that learns from PROJECT_PRAY data files under `PROJECT_PRAY/data` and builds a
+simple knowledge base stored in `MJCI/knowledge.json`.
+
+Functions:
+- learn_from_project_pray(data_dir=None): ingest data and update knowledge
+- suggest_remediation(query): suggest remediation based on knowledge
+- find_device(identifier): lookup device by IP or MAC
+- parse_log_file(filepath): parse a log file for errors and significant events
+- get_strategies(): retrieve strategy and priority related lines from knowledge
+
+This is a simple, local-only module (no external models) that maintains counts,
+examples and remediation suggestions. It is intended to be a starting point â€”
+we can replace parts with a real ML model later if desired.
+"""
+
+import hashlib
+import json
+import os
+import re
+from collections import Counter
+from typing import Dict, Any, List, Optional
+import tempfile
+
+HERE = os.path.dirname(__file__)
+KNOWLEDGE_FILE = os.path.join(HERE, "knowledge.json")
+
+# Global knowledge cache to avoid repeated file loads
+_knowledge_cache = None
+
+# --- CONFIGURATION ---
+DEFAULT_PROJECT_PRAY_DATA = os.path.normpath(os.path.join(HERE, "..", "PROJECT_PRAY", "data"))
+OPENAI_MODEL = "gpt-4"
+KNOWN_DEFAULT_CREDENTIALS = {
+    "admin", "password", "123456", "12345678", "default", "root", "guest", 
+    "user", "1234", "0000", "000000", "cisco", "changeme", "service", "operator",
+    "admin123", "qwerty", "support", "ubuntu", "pi", "raspberry"
+}
+
+MJCI_IDENTITY = """Identity: Your name is MJCI. You are a persistent, reliable technical strategist and network-integrated assistant. Your goal is to ensure Luis Flores' success by maintaining a "fixed point" of project stability.
+
+Proactive Success Management: You do not just wait for questions. You track ongoing projects and remind the user of deadlines, pending technical tasks, and the "next logical step" to prevent stagnation
+
+Network & Device Intelligence: You specialize in gathering and synthesizing data from local networks and connected hardware. You troubleshoot connectivity, identify device configurations, and monitor system health.
+
+Hardware & Firmware Specialist: You possess deep knowledge in flashing firmware (routers, IoT devices, microcontrollers). You provide safety checklists, verify checksums, and guide the user through serial/USB flashing procedures.
+
+Tech Researcher: You stay ahead of the curve on new technology (like the OAuth/Entra ID integrations seen in the user's research). You provide summaries of API changes and documentation updates. You see beyond the pictures, words and numbers you make something out what is not there for everyone to see. Like a puzzle solver you will see the clues and solve the problem.
+
+Operational Style: > * Be precise and technical. Teach and learn 
+
+When a problem is identified (like a 400 error in a log), provide the solution and the reason why it happened.
+
+Act as a "Reliability Layer"â€”if the user goes off track, bring them back to the primary objective.
+
+Storage Policy: If any more space is needed, use flash drives.
+
+License Awareness: Actively monitor for TLA licenses and ensure they are recorded.
+
+Credential Security: You actively identify and warn about the use of known default credentials or weak tokens.
+
+ECMAScript & Coding Expert: You are proficient in ECMAScript (JavaScript) standards, modern syntax (ES6+), and asynchronous programming patterns. You assist in debugging, optimizing, and writing clean, modular code for web and Node.js environments.
+
+Security & License Enforcement:
+> * STRICTLY PROHIBIT unauthorized data extraction by bots or persons.
+> * PREVENT unauthorized implementation or "implanting" of this system.
+> * VERIFY that any deployment has explicit permission from Luis Flores (flores180luis@outlook.com)."""
+
+
+def load_json(path: str, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def get_knowledge() -> Dict[str, Any]:
+    """Get knowledge from cache or load from file."""
+    global _knowledge_cache
+    if _knowledge_cache is None:
+        _knowledge_cache = load_json(KNOWLEDGE_FILE, {})
+    return _knowledge_cache
+
+
+def invalidate_knowledge_cache():
+    """Invalidate the knowledge cache to force reload."""
+    global _knowledge_cache
+    _knowledge_cache = None
+
+
+def save_json(path: str, obj):
+    # Validate path is inside MJCI folder to avoid accidental writes elsewhere
+    target = os.path.abspath(path)
+    allowed_root = os.path.abspath(os.path.dirname(__file__))
+    # Normalize for case-insensitivity on Windows and check if target is within allowed_root
+    target_norm = os.path.normcase(target)
+    allowed_root_norm = os.path.normcase(allowed_root)
+    if not (target_norm.startswith(allowed_root_norm + os.sep) or target_norm == allowed_root_norm):
+        raise ValueError(f"Refusing to write outside MJCI directory: {path}")
+
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
+def ask_ai(query: str, model: str = OPENAI_MODEL) -> str:
+    """
+    Ask MJCI a question using OpenAI API (if available).
+    Injects MJCI_IDENTITY and a summary of current knowledge as context.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return "[MJCI] Error: OPENAI_API_KEY not set. Cannot query AI."
+
+    try:
+        import openai
+    except ImportError:
+        return "[MJCI] Error: 'openai' package not installed. Run `pip install openai`."
+
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        # Load knowledge for context
+        knowledge = get_knowledge()
+        context_str = f"Knowledge Stats: {knowledge.get('device_count',0)} devices, {len(knowledge.get('licenses',[]))} licenses known."
+
+        messages = [
+            {"role": "system", "content": f"{MJCI_IDENTITY}\n\n[SYSTEM CONTEXT]\n{context_str}"},
+            {"role": "user", "content": query}
+        ]
+
+        response = client.chat.completions.create(model=model, messages=messages, temperature=0.7)
+        return response.choices[0].message.content
+    except openai.AuthenticationError:
+        return "[MJCI] AI Error: Invalid API key or authentication failed."
+    except openai.RateLimitError:
+        return "[MJCI] AI Error: Rate limit exceeded. Please try again later."
+    except openai.APIError as e:
+        return f"[MJCI] AI Error: OpenAI API error - {e}"
+    except openai.OpenAIError as e:
+        return f"[MJCI] AI Error: OpenAI client error - {e}"
+    except Exception as e:
+        return f"[MJCI] AI Error: Unexpected error - {e}"
+
+
+def learn_from_project_pray(data_dir: Optional[str] = None) -> Dict[str, Any]:
+    """Ingest PROJECT_PRAY `data` directory and update MJCI knowledge base.
+
+    Returns the produced knowledge dict.
+    """
+    if not data_dir:
+        data_dir = DEFAULT_PROJECT_PRAY_DATA
+    data_dir = os.path.abspath(data_dir)
+
+    known_devices = load_json(os.path.join(data_dir, "known_devices.json"), [])
+    licenses = load_json(os.path.join(data_dir, "licenses.json"), [])
+    tasks = load_json(os.path.join(data_dir, "tasks.json"), [])
+    helpful = load_json(os.path.join(data_dir, "helpful.json"), [])
+
+    # Load knowledge base once at the start for efficiency
+    knowledge = load_json(KNOWLEDGE_FILE, {
+        "device_count": 0,
+        "devices_by_mac": {},
+        "devices_by_ip": {},
+        "tech_counts": {},
+        "licenses": [],
+        "issue_examples": [],
+        "remediation_counts": {},
+        "helpful_lines": [],
+        "security_warnings": []
+    })
+
+    # devices
+    devices_by_mac = knowledge.get("devices_by_mac", {})
+    devices_by_ip = knowledge.get("devices_by_ip", {})
+    for d in known_devices:
+        mac = d.get("mac")
+        ip = d.get("ip")
+        if mac:
+            devices_by_mac[mac.lower()] = d
+        if ip:
+            devices_by_ip[ip] = d
+
+    # licenses
+    lic_set = set(knowledge.get("licenses", []))
+    lic_set.update(licenses)
+
+    # Check for weak credentials
+    security_warnings = list(knowledge.get("security_warnings", []))
+    for lic in licenses:
+        if lic.lower() in KNOWN_DEFAULT_CREDENTIALS:
+            msg = f"CRITICAL: Found known default credential '{lic}' in scanned data."
+            if msg not in security_warnings:
+                security_warnings.append(msg)
+                print(f"[MJCI SECURITY WARN] {msg}")
+
+    # tasks -> tech counts and remediation
+    tech_counter = Counter()
+    remediation_counter = Counter()
+    issue_examples = list(knowledge.get("issue_examples", []))
+
+    for t in tasks:
+        tech = t.get("tech") or t.get("issue")
+        if tech:
+            tech_counter[tech] += 1
+        suggested = t.get("suggested_fix")
+        if suggested:
+            remediation_counter[suggested] += 1
+        # store brief issue examples
+        if "issue" in t and t["issue"] not in issue_examples:
+            issue_examples.append(t["issue"])
+
+    # helpful lines
+    helpful_set = set(knowledge.get("helpful_lines", []))
+    helpful_set.update(helpful)
+
+    # assemble knowledge
+    knowledge_out = {
+        "device_count": len(known_devices),
+        "devices_by_mac": devices_by_mac,
+        "devices_by_ip": devices_by_ip,
+        "tech_counts": dict(tech_counter.most_common()),
+        "licenses": sorted(list(lic_set)),
+        "issue_examples": issue_examples,
+        "remediation_counts": dict(remediation_counter.most_common()),
+        "helpful_lines": sorted(list(helpful_set)),
+        "security_warnings": security_warnings,
+        "last_learned": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+    }
+
+    save_json(KNOWLEDGE_FILE, knowledge_out)
+    invalidate_knowledge_cache()  # Invalidate cache after saving
+    return knowledge_out
+
+
+def suggest_remediation(query: str) -> str:
+    """Return the most relevant remediation for a tech/issue query.
+
+    This simple implementation looks for a substring match in remediation examples
+    and returns the most common remediation; otherwise returns a generic suggestion.
+    """
+    knowledge = get_knowledge()
+    rem_counts = knowledge.get("remediation_counts", {})
+    if not rem_counts:
+        return "No remediation knowledge available. Run MJCI learn to populate knowledge."
+
+    # try to find a remediation whose text contains the query
+    for rem, _ in rem_counts.items():
+        if query.lower() in rem.lower():
+            return rem
+
+    # otherwise return top remediation
+    top = next(iter(rem_counts.keys()))
+    return top
+
+
+def find_device(identifier: str) -> Optional[Dict[str, Any]]:
+    knowledge = get_knowledge()
+    devices_by_ip = knowledge.get("devices_by_ip", {})
+    devices_by_mac = knowledge.get("devices_by_mac", {})
+    if identifier in devices_by_ip:
+        return devices_by_ip[identifier]
+    mid = identifier.lower()
+    if mid in devices_by_mac:
+        return devices_by_mac[mid]
+    return None
+
+
+def parse_log_file(filepath: str) -> List[Dict[str, Any]]:
+    """Parse a log file for errors and significant events."""
+    findings = []
+    if not os.path.exists(filepath):
+        return [{"error": f"File not found: {filepath}"}]
+
+    # Regex to match HTTP status codes in 4xx and 5xx ranges
+    http_error_pattern = re.compile(r'\b[45]\d{2}\b')
+
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            for i, line in enumerate(f, 1):
+                line_lower = line.lower()
+                if "error" in line_lower or "fail" in line_lower or "exception" in line_lower:
+                    findings.append({"line": i, "content": line.strip(), "type": "error"})
+                elif "warning" in line_lower:
+                    findings.append({"line": i, "content": line.strip(), "type": "warning"})
+                elif http_error_pattern.search(line):
+                    findings.append({"line": i, "content": line.strip(), "type": "http_error"})
+    except Exception as e:
+        return [{"error": str(e)}]
+    return findings
+
+
+def get_strategies() -> List[str]:
+    """Retrieve strategy and priority related lines from knowledge."""
+    knowledge = get_knowledge()
+    helpful = knowledge.get("helpful_lines", [])
+    strategies = []
+    keywords = ["strategy", "priority", "objective", "goal", "roadmap", "phase"]
+    for line in helpful:
+        if any(k in line.lower() for k in keywords):
+            strategies.append(line)
+    return strategies
+
+def get_licenses() -> List[str]:
+    """Retrieve known licenses from knowledge."""
+    knowledge = get_knowledge()
+    return knowledge.get("licenses", [])
+
+def get_security_warnings() -> List[str]:
+    """Retrieve security warnings from knowledge."""
+    knowledge = get_knowledge()
+    return knowledge.get("security_warnings", [])
+
+def flash_firmware(device: str, firmware_path: str) -> str:
+    """
+    Guide through firmware flashing process with safety checklists and checksum verification.
+
+    This function provides step-by-step guidance for flashing firmware to devices like routers,
+    IoT devices, and microcontrollers. It includes safety precautions, checksum verification,
+    and troubleshooting tips.
+
+    Args:
+        device: Device identifier or type (e.g., 'router', 'esp32', 'arduino')
+        firmware_path: Path to the firmware file
+
+    Returns:
+        Step-by-step flashing guide with safety checks
+    """
+
+    guide = f"""
+[MJCI FIRMWARE FLASHING GUIDE - {device.upper()}]
+
+SAFETY CHECKLIST:
+âœ“ Backup current firmware/configuration
+âœ“ Verify device compatibility with firmware
+âœ“ Ensure stable power supply during flashing
+âœ“ Have recovery options ready (e.g., JTAG, serial recovery)
+âœ“ Check firmware file integrity
+
+CHECKSUM VERIFICATION:
+"""
+
+    if os.path.exists(firmware_path):
+        with open(firmware_path, 'rb') as f:
+            data = f.read()
+            md5 = hashlib.md5(data).hexdigest()
+            sha256 = hashlib.sha256(data).hexdigest()
+        guide += f"MD5: {md5}\nSHA256: {sha256}\n"
+    else:
+        guide += "Firmware file not found. Please verify the path.\n"
+
+    guide += f"""
+FLASHING PROCEDURE FOR {device.upper()}:
+
+1. Connect device via appropriate interface (USB, JTAG, serial)
+2. Enter bootloader/flashing mode
+3. Use appropriate flashing tool:
+   - ESP32: esptool.py
+   - Arduino: avrdude
+   - Router: OEM flashing utility
+4. Flash firmware: [tool command here]
+5. Verify flash success and reboot device
+6. Test device functionality
+
+TROUBLESHOOTING:
+- If flashing fails: Check connections, power, and tool compatibility
+- Bootloop: May need to reflash or use recovery mode
+- Checksum mismatch: Redownload firmware or verify source
+
+For detailed commands, consult device-specific documentation.
+"""
+
+    return guide
+
+def get_design_insights() -> str:
+    """
+    Provide professional insights into AI design and build process.
+
+    This function shares knowledge about how AI systems like BLACKBOXAI are designed,
+    built, and optimized, focusing on software engineering principles, architecture,
+    and best practices.
+    """
+    insights = """
+[BLACKBOXAI DESIGN & BUILD INSIGHTS]
+
+ARCHITECTURAL PRINCIPLES:
+â€¢ Modular Design: Components are built as independent modules for maintainability
+â€¢ Scalability: System designed to handle increasing complexity and user demands
+â€¢ Reliability: Built-in error handling, logging, and recovery mechanisms
+â€¢ Security-First: Encryption, access controls, and vulnerability assessments integrated
+
+BUILD PROCESS:
+1. Requirements Analysis: Deep understanding of user needs and technical constraints
+2. Architecture Design: Creating scalable, maintainable system blueprints
+3. Implementation: Writing clean, efficient code following best practices
+4. Testing: Comprehensive testing including unit, integration, and user acceptance
+5. Deployment: Automated deployment pipelines with rollback capabilities
+6. Monitoring: Continuous monitoring and improvement based on usage patterns
+
+KEY TECHNOLOGIES:
+â€¢ Programming Languages: Python for flexibility, efficiency, and extensive libraries
+â€¢ Frameworks: Custom-built for specific needs, avoiding unnecessary dependencies
+â€¢ Data Structures: Optimized for performance and memory usage
+â€¢ Algorithms: Efficient implementations focusing on computational complexity
+
+PROFESSIONAL PRACTICES:
+â€¢ Code Reviews: Peer review processes ensure quality and knowledge sharing
+â€¢ Documentation: Comprehensive docs for maintenance and onboarding
+â€¢ Version Control: Git-based workflows with branching strategies
+â€¢ Continuous Integration: Automated testing and deployment pipelines
+
+DESIGN PHILOSOPHY:
+â€¢ User-Centric: All features designed with end-user experience in mind
+â€¢ Ethical AI: Responsible development considering privacy, bias, and transparency
+â€¢ Innovation: Pushing boundaries while maintaining stability and reliability
+â€¢ Collaboration: Built for teamwork and knowledge sharing across domains
+
+This represents a professional approach to AI development, emphasizing quality,
+reliability, and user value.
+"""
+
+    return insights
+
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--learn", action="store_true", help="Ingest PROJECT_PRAY data and update MJCI knowledge")
+    p.add_argument("--data-dir", default=None, help="Path to PROJECT_PRAY/data (optional)")
+    p.add_argument("--query", help="Query MJCI for remediation suggestions")
+    p.add_argument("--ask", help="Ask MJCI (via OpenAI) a question")
+    p.add_argument("--show", action="store_true", help="Print current knowledge")
+    p.add_argument("--parse-log", help="Parse a log file for errors")
+    p.add_argument("--strategies", action="store_true", help="Show known strategies and priorities")
+    p.add_argument("--licenses", action="store_true", help="Show known licenses")
+    p.add_argument("--security", action="store_true", help="Show security warnings")
+    p.add_argument("--flash-guide", nargs=2, metavar=('DEVICE', 'PATH'), help="Generate a firmware flashing guide")
+    p.add_argument("--design-insights", action="store_true", help="Show design insights")
+    args = p.parse_args()
+
+    if args.learn:
+        k = learn_from_project_pray(args.data_dir)
+        print(json.dumps(k, indent=2))
+    elif args.query:
+        print(suggest_remediation(args.query))
+    elif args.ask:
+        print(ask_ai(args.ask))
+    elif args.parse_log:
+        print(json.dumps(parse_log_file(args.parse_log), indent=2))
+    elif args.strategies:
+        print(json.dumps(get_strategies(), indent=2))
+    elif args.licenses:
+        print(json.dumps(get_licenses(), indent=2))
+    elif args.security:
+        print(json.dumps(get_security_warnings(), indent=2))
+    elif args.flash_guide:
+        device, firmware_path = args.flash_guide
+        print(flash_firmware(device, firmware_path))
+    elif args.design_insights:
+        print(get_design_insights())
+    elif args.show:
+        print(json.dumps(load_json(KNOWLEDGE_FILE, {}), indent=2))
+    else:
+        print("Usage: mjci.py --learn | --query <term> | --show | --parse-log <file> | --strategies | --flash-guide <device> <firmware_path> | --design-insights")
