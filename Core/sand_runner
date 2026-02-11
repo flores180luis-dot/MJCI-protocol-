@@ -1,0 +1,48 @@
+"""
+Run MJCI.learn in a subprocess with limited environment and timeout.
+This provides a safer way to trigger MJCI learning without importing it
+into the processor process.
+"""
+import subprocess
+import os
+import sys
+import shlex
+from pathlib import Path
+
+HERE = Path(__file__).parent
+MJCI_PY = HERE / "mjci.py"
+
+
+def run_learn(data_dir: str | None = None, timeout: int = 30) -> int:
+    if not MJCI_PY.exists():
+        print("MJCI module not found.")
+        return 2
+
+    cmd = [sys.executable, str(MJCI_PY), "--learn"]
+    if data_dir:
+        cmd += ["--data-dir", data_dir]
+
+    # minimal env: drop potentially dangerous env vars
+    safe_env = {k: v for k, v in os.environ.items() if k in ("PATH", "TEMP", "TMP", "HOME", "USERPROFILE")}
+    # explicit safe flags
+    safe_env["MJCI_SANDBOX"] = "1"
+
+    try:
+        completed = subprocess.run(cmd, env=safe_env, cwd=str(HERE), capture_output=True, text=True, timeout=timeout)
+        print("MJCI stdout:\n", completed.stdout)
+        if completed.stderr:
+            print("MJCI stderr:\n", completed.stderr)
+        return completed.returncode
+    except subprocess.TimeoutExpired:
+        print("MJCI learn timed out")
+        return 3
+
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--data-dir", default=None)
+    p.add_argument("--timeout", type=int, default=30)
+    args = p.parse_args()
+    rc = run_learn(args.data_dir, args.timeout)
+    sys.exit(rc)
