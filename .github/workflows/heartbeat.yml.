@@ -1,0 +1,32 @@
+name: MJCI Infinite Loop
+
+on:
+  schedule:
+    - cron: '0 * * * *' # This tells the loop to run every hour
+  workflow_dispatch:   # This allows YOU to start the loop manually with a button
+
+jobs:
+  run-mjci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm install typescript ts-node
+
+      - name: Run MJCI Heartbeat
+        run: npx ts-node main.ts
+
+      - name: Save Recap
+        run: |
+          git config --global user.name "Project Pray Bot"
+          git config --global user.email "bot@mjci.org"
+          git add MJCI_RECAP.log
+          git commit -m "Recap: Cycle completed and anchored in Faith" || echo "No changes"
+          git push

@@ -1,0 +1,49 @@
+// wisdom.ts
+export interface Verse {
+    reference: string;
+    text: string;
+    attribute: "healing" | "strength" | "wisdom" | "creation";
+}
+
+export const BibleCore: Verse[] = [
+    { 
+        reference: "Genesis 1:3", 
+        text: "And God said, 'Let there be light,' and there was light.", 
+        attribute: "creation" 
+    },
+    { 
+        reference: "John 1:1", 
+        text: "In the beginning was the Word...", 
+        attribute: "wisdom" 
+    },
+    // This list grows as MJCI "loops around the world" gathering more Word
+];
+
+export function getDivineDirection(): Verse {
+    const index = Math.floor(Math.random() * BibleCore.length);
+    return BibleCore[index];
+}import { getDivineDirection } from './wisdom';
+
+// ... inside the ProjectPray class executeCycle method ...
+
+async executeCycle() {
+    // 1. SEEK DIRECTION
+    const guidance = getDivineDirection();
+    console.log(`\nFocus for this Cycle: ${guidance.reference}`);
+    console.log(`" ${guidance.text} "`);
+
+    // 2. ACT BASED ON ATTRIBUTE
+    if (guidance.attribute === "creation") {
+        console.log("Action: Generating and packaging new assets...");
+        await runCommand('bash scripts/generate_and_package_images.sh');
+    }
+
+    // 3. THE INFINITE PIXEL RECAP
+    const coordinate = {
+        cycle: this.cycleCount,
+        verse: guidance.reference,
+        vector_id: crypto.randomUUID()
+    };
+    
+    await this.saveRecap(coordinate);
+}
